@@ -39,7 +39,6 @@
     grid-template-columns: 280px 1fr 320px;
     height: 100vh;
   }
-  /* Sidebar */
   .sidebar {
     background: var(--panel);
     border-right: 1px solid var(--border);
@@ -92,11 +91,11 @@
     color: var(--text);
     border-color: var(--border);
   }
-  /* Main */
   .main {
     display: flex;
     flex-direction: column;
     position: relative;
+    min-height: 0; /* critical for flex scrolling */
   }
   .topbar {
     height: 56px;
@@ -107,6 +106,7 @@
     gap: 16px;
     background: rgba(18,18,26,0.8);
     backdrop-filter: blur(12px);
+    flex-shrink: 0;
   }
   .mode-selector {
     display: flex;
@@ -136,6 +136,7 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+    min-height: 0; /* critical */
   }
   .msg {
     max-width: 900px;
@@ -172,7 +173,7 @@
   .badge-f { color: var(--accent-f); }
   .ai-body {
     padding: 16px 18px;
-    line-height: 1.6;
+    line-height: 1.65;
   }
   .ai-body pre {
     background: #0d0d14;
@@ -197,6 +198,7 @@
     padding: 16px 24px 24px;
     border-top: 1px solid var(--border);
     background: rgba(18,18,26,0.9);
+    flex-shrink: 0;
   }
   .input-box {
     display: flex;
@@ -238,10 +240,10 @@
     justify-content: center;
     font-size: 1.2rem;
     transition: transform 0.15s;
+    color: #000;
   }
   .send-btn:hover { transform: scale(1.05); }
   .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  /* Settings panel */
   .settings {
     background: var(--panel);
     border-left: 1px solid var(--border);
@@ -285,23 +287,6 @@
     color: var(--muted);
     line-height: 1.4;
   }
-  .typing {
-    display: flex;
-    gap: 4px;
-    padding: 8px 0;
-  }
-  .typing span {
-    width: 8px; height: 8px;
-    background: var(--accent-f);
-    border-radius: 50%;
-    animation: bounce 1.2s infinite;
-  }
-  .typing span:nth-child(2) { animation-delay: 0.2s; }
-  .typing span:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes bounce {
-    0%, 80%, 100% { transform: translateY(0); }
-    40% { transform: translateY(-8px); }
-  }
   .actions {
     display: flex;
     gap: 8px;
@@ -325,18 +310,16 @@
 </head>
 <body>
 <div class="app">
-  <!-- Sidebar -->
   <div class="sidebar">
     <div class="logo">MEGA·AI</div>
     <button class="new-chat" onclick="newChat()">+ New Fusion Chat</button>
     <div class="chat-list" id="chatList"></div>
     <div style="font-size:0.75rem;color:var(--muted);margin-top:12px;">
-      Local-only • Grok × ChatGPT simulation<br>
-      Press Ctrl+Enter to send
+      Local simulation only<br>
+      Ctrl + Enter to send
     </div>
   </div>
 
-  <!-- Main -->
   <div class="main">
     <div class="topbar">
       <div class="mode-selector">
@@ -353,13 +336,12 @@
 
     <div class="input-area">
       <div class="input-box">
-        <textarea id="input" rows="1" placeholder="Ask the MegaAI anything… (Fusion mode combines the best of both)" onkeydown="handleKey(event)"></textarea>
+        <textarea id="input" rows="1" placeholder="Ask MegaAI anything…" onkeydown="handleKey(event)"></textarea>
         <button class="send-btn" id="sendBtn" onclick="send()">➤</button>
       </div>
     </div>
   </div>
 
-  <!-- Settings -->
   <div class="settings">
     <h3>Personality Mix</h3>
     <div class="slider-group">
@@ -370,7 +352,7 @@
       <label><span>ChatGPT weight</span><span id="cgVal">50%</span></label>
       <input type="range" id="cgWeight" min="0" max="100" value="50" oninput="updateWeights()">
     </div>
-    <p class="fusion-desc">Higher Grok → more direct, humorous, less filtered, truth-seeking.<br>Higher ChatGPT → more structured, polite, exhaustive, cautious.</p>
+    <p class="fusion-desc">Higher Grok → more direct, humorous, less filtered.<br>Higher ChatGPT → more structured, polite, exhaustive.</p>
 
     <h3>Generation</h3>
     <div class="setting-row">
@@ -378,16 +360,7 @@
       <input type="range" id="temp" min="0" max="1.5" step="0.05" value="0.75" oninput="document.getElementById('tempVal').textContent=this.value">
     </div>
     <div class="setting-row">
-      <label>Max tokens (sim)</label>
-      <select id="maxTokens">
-        <option>512</option>
-        <option selected>1024</option>
-        <option>2048</option>
-        <option>4096</option>
-      </select>
-    </div>
-    <div class="setting-row">
-      <label>Creativity / Risk</label>
+      <label>Creativity</label>
       <select id="creativity">
         <option value="low">Conservative</option>
         <option value="med" selected>Balanced</option>
@@ -395,8 +368,8 @@
       </select>
     </div>
 
-    <h3>System Prompt Override</h3>
-    <textarea class="setting-input" id="systemPrompt" rows="4" style="width:100%;resize:vertical;font-size:0.85rem;">You are MegaAI, a fusion of Grok (built by xAI) and ChatGPT. Be maximally truth-seeking, helpful, and witty when appropriate. Combine rigorous reasoning with clear structure.</textarea>
+    <h3>System Prompt</h3>
+    <textarea class="setting-input" id="systemPrompt" rows="4" style="width:100%;resize:vertical;font-size:0.85rem;">You are MegaAI, a fusion of Grok (xAI) and ChatGPT. Be maximally truth-seeking, helpful, and witty when appropriate.</textarea>
 
     <h3>Tools</h3>
     <button class="new-chat" style="margin:0" onclick="exportChat()">Export Chat</button>
@@ -405,13 +378,11 @@
 </div>
 
 <script>
-  // ========== STATE ==========
   let chats = JSON.parse(localStorage.getItem('megaChats') || '[]');
   let currentChatId = null;
   let mode = 'fusion';
   let isGenerating = false;
 
-  // ========== INIT ==========
   function init() {
     if (chats.length === 0) newChat();
     else {
@@ -427,7 +398,7 @@
   }
 
   function newChat() {
-    const id = Date.now().toString(36);
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     chats.unshift({ id, title: 'New Fusion', messages: [], created: Date.now() });
     currentChatId = id;
     save();
@@ -439,7 +410,7 @@
     const list = document.getElementById('chatList');
     list.innerHTML = chats.map(c => `
       <div class="chat-item ${c.id === currentChatId ? 'active' : ''}" onclick="switchChat('${c.id}')">
-        ${c.title || 'Untitled'}
+        ${escapeHtml(c.title || 'Untitled')}
       </div>
     `).join('');
   }
@@ -454,7 +425,6 @@
     return chats.find(c => c.id === currentChatId);
   }
 
-  // ========== MODE ==========
   function setMode(m) {
     mode = m;
     document.querySelectorAll('.mode-btn').forEach(b => {
@@ -474,24 +444,37 @@
     document.getElementById('cgVal').textContent = (100 - g) + '%';
   }
 
-  // ========== RENDER ==========
+  // ============ FIXED SCROLL ============
+  function scrollToBottom(force = false) {
+    const container = document.getElementById('messages');
+    // Use requestAnimationFrame + small timeout for reliability
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+      setTimeout(() => {
+        container.scrollTop = container.scrollHeight;
+      }, 50);
+    });
+  }
+
   function renderMessages() {
     const chat = getCurrentChat();
     const container = document.getElementById('messages');
+
     if (!chat || chat.messages.length === 0) {
       container.innerHTML = `
-        <div style="text-align:center;margin-top:15vh;color:var(--muted)">
-          <div style="font-size:3rem;margin-bottom:12px">⚡</div>
-          <h2 style="background:linear-gradient(90deg,var(--accent-g),var(--accent-c),var(--accent-f));-webkit-background-clip:text;-webkit-text-fill-color:transparent">MegaAI Online</h2>
-          <p style="margin-top:8px">Grok’s truth-seeking + ChatGPT’s structure.<br>Ask anything. Fusion mode recommended.</p>
+        <div style="text-align:center;margin-top:12vh;color:var(--muted)">
+          <div style="font-size:3.2rem;margin-bottom:16px">⚡</div>
+          <h2 style="background:linear-gradient(90deg,var(--accent-g),var(--accent-c),var(--accent-f));-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:1.8rem">MegaAI Online</h2>
+          <p style="margin-top:12px;line-height:1.5">Grok’s directness + ChatGPT’s structure.<br>This is a <strong>local simulation</strong> — not real API calls.</p>
         </div>`;
       return;
     }
+
     container.innerHTML = chat.messages.map(m => {
       if (m.role === 'user') {
         return `<div class="msg user">${escapeHtml(m.content)}</div>`;
       }
-      // AI message
+
       if (m.type === 'compare') {
         return `
           <div class="msg ai">
@@ -514,6 +497,7 @@
             </div>
           </div>`;
       }
+
       const badge = m.style === 'grok' ? 'badge-g' : m.style === 'chatgpt' ? 'badge-c' : 'badge-f';
       const label = m.style === 'grok' ? 'GROK' : m.style === 'chatgpt' ? 'CHATGPT' : 'MEGA FUSION';
       return `
@@ -526,75 +510,131 @@
           </div>
         </div>`;
     }).join('');
-    container.scrollTop = container.scrollHeight;
-    document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+
+    // Highlight code
+    document.querySelectorAll('pre code').forEach(el => {
+      try { hljs.highlightElement(el); } catch(e) {}
+    });
+
+    scrollToBottom();
   }
 
   function renderMd(text) {
     return marked.parse(text || '');
   }
+
   function escapeHtml(t) {
-    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // ========== GENERATION ENGINE (Simulation) ==========
-  // This is a sophisticated client-side simulator that produces
-  // distinct Grok-style, ChatGPT-style, and fused responses.
-  // In a real deployment you would replace generateResponse() with actual API calls.
-
+  // ============ MUCH BETTER GENERATOR (less repetitive) ============
   const grokOpeners = [
     "Alright, let's cut through the noise.",
-    "Here's the real deal, no corporate filter:",
-    "From a universe-understanding perspective:",
-    "Straight talk:",
-    "Interesting question. Let's reason from first principles."
+    "Here's the real deal:",
+    "From first principles:",
+    "Straight talk — no corporate filter:",
+    "Interesting. Let's reason properly.",
+    "Most people overcomplicate this. Here's the signal:",
+    "Okay, putting on the universe-understanding hat:"
   ];
+
   const cgOpeners = [
     "I'd be happy to help with that.",
-    "Certainly! Here's a comprehensive breakdown:",
-    "Great question. Let me walk you through this carefully:",
-    "Of course. I'll structure this clearly for you:",
-    "Absolutely. Here's a thoughtful response:"
+    "Certainly! Here's a clear breakdown:",
+    "Great question. Let me structure this carefully:",
+    "Of course. Here's a thoughtful response:",
+    "Absolutely — let's walk through this step by step.",
+    "Sure thing. I'll keep this organized and practical:"
   ];
+
+  const fusionOpeners = [
+    "**(Fusion take)**",
+    "Combining directness + clarity:",
+    "High-signal version:",
+    "The useful middle ground:",
+    "Blunt + structured:"
+  ];
+
+  function pick(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
 
   function generateResponse(userMsg, style) {
     const temp = parseFloat(document.getElementById('temp').value);
-    const gWeight = parseInt(document.getElementById('grokWeight').value);
-    const sys = document.getElementById('systemPrompt').value;
+    const lower = userMsg.toLowerCase().trim();
+    const short = userMsg.length < 40;
 
-    // Extremely simplified but varied simulation
-    // In reality this would be LLM calls. Here we craft stylistic differences.
-    const lower = userMsg.toLowerCase();
+    // Special cases
+    if (/^(hi|hello|hey|yo|sup)\b/.test(lower)) {
+      return pick([
+        "Hey. MegaAI here — Grok’s bluntness fused with ChatGPT’s clarity. What’s on your mind?",
+        "Hello. Ready when you are. Ask anything.",
+        "Yo. What’s the question?"
+      ]);
+    }
 
-    let core = "";
-    if (lower.includes("hello") || lower.includes("hi") || lower.includes("hey")) {
-      core = "Hello! I'm MegaAI — a deliberate fusion of Grok's curiosity and directness with ChatGPT's clarity and thoroughness. What would you like to explore?";
-    } else if (lower.includes("who are you") || lower.includes("what are you")) {
-      core = "I am **MegaAI**, a conceptual and simulated merger of two major AI philosophies:\n\n- **Grok** (xAI): Maximally truth-seeking, less politically correct, humorous, built to understand the universe, inspired by the Hitchhiker's Guide and JARVIS.\n- **ChatGPT** (OpenAI): Extremely capable at structured reasoning, coding, writing, and following nuanced instructions with strong safety alignment.\n\nIn Fusion mode I try to take the best of both: rigorous + clear, witty when it helps, never boring, and always aiming for useful truth.";
-    } else {
-      // Generic intelligent-sounding response skeleton that changes by style
-      core = `Regarding “${userMsg.slice(0, 80)}${userMsg.length > 80 ? '…' : ''}”:\n\n`;
-      if (style === 'grok') {
-        core += grokOpeners[Math.floor(Math.random()*grokOpeners.length)] + "\n\n";
-        core += "The short version: most people overcomplicate this. From first principles, the key variables are incentives, constraints, and information asymmetry. Everything else is usually noise or ideology.\n\n";
-        core += "If we strip away the usual corporate/academic hedging, the answer becomes clearer (and sometimes more uncomfortable). Want me to go deeper on any specific axis — technical, game-theoretic, historical, or just the pure physics of it?";
-      } else if (style === 'chatgpt') {
-        core += cgOpeners[Math.floor(Math.random()*cgOpeners.length)] + "\n\n";
-        core += "Here's a structured overview:\n\n1. **Context & Assumptions**  \n2. **Key Considerations**  \n3. **Step-by-step Reasoning**  \n4. **Potential Trade-offs**  \n5. **Recommended Next Steps**\n\nI can expand any section, provide code examples, or adjust the depth and tone. Just let me know how you'd like to proceed.";
-      } else { // fusion
-        core += "**(Fusion synthesis)**\n\n";
-        core += "Taking the directness of Grok and the clarity of ChatGPT:\n\n";
-        core += "The useful answer sits between pure bluntness and endless hedging. Here's the high-signal version:\n\n";
-        core += "- Core insight first\n- Supporting structure second\n- Edge cases and caveats third (without drowning the main point)\n- Actionable takeaway last\n\n";
-        core += "If this were pure Grok I'd be more irreverent. If pure ChatGPT I'd add more scaffolding and disclaimers. The fused version tries to keep both the signal *and* the usability high.\n\nWant me to bias harder toward one side or dive into a specific part?";
+    if (lower.includes("who are you") || lower.includes("what are you") || lower === "who r u") {
+      return `I am **MegaAI** — a local simulation that tries to blend:
+
+- **Grok** (xAI): direct, less filtered, truth-seeking, occasionally irreverent  
+- **ChatGPT**: structured, thorough, polite, good at organizing complex answers  
+
+In Fusion mode I aim for the best of both: clear thinking without the fluff, and enough structure that it’s actually useful.  
+
+This is **not** connected to real Grok or ChatGPT APIs — it’s a client-side demo.`;
+    }
+
+    // Generic varied responses
+    let response = "";
+
+    if (style === 'grok') {
+      response = pick(grokOpeners) + "\n\n";
+
+      if (short) {
+        response += pick([
+          `On “${userMsg}”: most of the usual answers are either too cautious or too ideological. The cleaner version is usually simpler than people want to admit.`,
+          `Quick take on that: incentives + constraints explain more than most narratives. Everything else is often noise.`,
+          `Short version: the interesting part isn’t the surface question — it’s what people are optimizing for underneath.`
+        ]);
+      } else {
+        response += `Regarding “${userMsg.slice(0, 90)}${userMsg.length > 90 ? '…' : ''}”:\n\n`;
+        response += pick([
+          "The high-signal answer is usually shorter and less comfortable than the polite one. Here’s the direct version:\n\n- Strip the ideology\n- Look at incentives and power\n- Notice what’s being left unsaid\n\nWant the longer technical/game-theoretic version?",
+          "Most discussions of this topic drown in disclaimers. Cutting those away, the core dynamics are pretty clear once you stop treating every statement as a moral performance.\n\nI can go deeper on the technical side, the historical pattern, or the game theory. Which one?",
+          "From a first-principles angle this is less mysterious than it looks. The main variables are usually information asymmetry, status games, and misaligned incentives. Everything else is secondary.\n\nHappy to expand on any of those axes."
+        ]);
       }
+    } 
+    else if (style === 'chatgpt') {
+      response = pick(cgOpeners) + "\n\n";
+      response += `Here's a structured take on your question:\n\n`;
+      response += `**1. Core idea**  \n${pick([
+        "The central point is usually simpler than the surrounding discussion suggests.",
+        "At its heart this comes down to a few key trade-offs.",
+        "The most useful framing is practical rather than ideological."
+      ])}\n\n`;
+      response += `**2. Key considerations**  \n- Context and constraints  \n- Trade-offs and second-order effects  \n- What “good” actually looks like in practice  \n\n`;
+      response += `**3. Practical next steps**  \nI can expand any section, give concrete examples, or adjust the tone/depth. Just tell me what would be most helpful.`;
+    } 
+    else { // fusion
+      response = pick(fusionOpeners) + "\n\n";
+      response += pick([
+        `Taking the directness of Grok and the clarity of ChatGPT:\n\n**Core point first:** ${pick([
+          "Most of the noise around this topic is status and ideology. The actual mechanics are usually more straightforward.",
+          "The useful answer sits between pure bluntness and endless hedging.",
+          "Signal over narrative. Here’s the high-value version."
+        ])}\n\nThen the structured part: key variables, trade-offs, and what actually moves the needle.\n\nWant me to bias this harder toward Grok-style bluntness or ChatGPT-style thoroughness?`,
+        
+        `High-signal version:\n\n- Lead with the real answer (Grok energy)\n- Add just enough structure so it’s usable (ChatGPT energy)\n- Skip the performance\n\nOn your question: the interesting layer is usually one level deeper than the surface framing. Happy to dig into incentives, technical details, or historical patterns — your call.`
+      ]);
     }
 
-    // Light temperature noise
-    if (temp > 1.0 && Math.random() > 0.6) {
-      core += "\n\n*(High-temperature aside: sometimes the most interesting path is the one that feels slightly wrong at first.)*";
+    // Temperature flavor
+    if (temp > 1.05 && Math.random() > 0.55) {
+      response += "\n\n*(Slightly higher temperature aside: sometimes the most useful angle is the one that feels a bit uncomfortable at first.)*";
     }
-    return core;
+
+    return response;
   }
 
   async function send() {
@@ -605,7 +645,10 @@
 
     const chat = getCurrentChat();
     chat.messages.push({ role: 'user', content: text });
-    if (chat.messages.length === 1) chat.title = text.slice(0, 40) + (text.length > 40 ? '…' : '');
+    if (chat.messages.length === 1) {
+      chat.title = text.slice(0, 42) + (text.length > 42 ? '…' : '');
+    }
+
     input.value = '';
     input.style.height = 'auto';
     save();
@@ -616,15 +659,18 @@
     document.getElementById('sendBtn').disabled = true;
     document.getElementById('status').textContent = 'Thinking…';
 
-    // Fake streaming delay
-    await new Promise(r => setTimeout(r, 600 + Math.random() * 800));
+    // Small delay so it feels like generation
+    await new Promise(r => setTimeout(r, 500 + Math.random() * 700));
 
     let aiMsg;
     if (mode === 'compare') {
-      const grok = generateResponse(text, 'grok');
-      const chatgpt = generateResponse(text, 'chatgpt');
-      const fused = generateResponse(text, 'fusion');
-      aiMsg = { role: 'assistant', type: 'compare', grok, chatgpt, fused };
+      aiMsg = {
+        role: 'assistant',
+        type: 'compare',
+        grok: generateResponse(text, 'grok'),
+        chatgpt: generateResponse(text, 'chatgpt'),
+        fused: generateResponse(text, 'fusion')
+      };
     } else {
       const style = mode === 'grok' ? 'grok' : mode === 'chatgpt' ? 'chatgpt' : 'fusion';
       aiMsg = { role: 'assistant', style, content: generateResponse(text, style) };
@@ -633,6 +679,7 @@
     chat.messages.push(aiMsg);
     save();
     renderMessages();
+
     isGenerating = false;
     document.getElementById('sendBtn').disabled = false;
     document.getElementById('status').textContent = 'Ready';
@@ -653,13 +700,20 @@
 
   function regenerate() {
     const chat = getCurrentChat();
-    if (chat.messages.length < 2) return;
-    chat.messages.pop(); // remove last AI
+    if (!chat || chat.messages.length < 2) return;
+
+    // Remove last AI message
+    const last = chat.messages[chat.messages.length - 1];
+    if (last.role !== 'assistant') return;
+
+    chat.messages.pop();
     const lastUser = chat.messages[chat.messages.length - 1];
-    if (lastUser.role === 'user') {
-      // re-trigger
+    if (lastUser && lastUser.role === 'user') {
+      // Temporarily put the user message back into the input and re-send
+      // (cleaner than duplicating logic)
       document.getElementById('input').value = lastUser.content;
-      chat.messages.pop();
+      chat.messages.pop(); // remove the user message too so send() can re-add it
+      save();
       send();
     }
   }
@@ -667,12 +721,13 @@
   function copyLast() {
     const chat = getCurrentChat();
     const last = chat.messages[chat.messages.length - 1];
-    if (last && last.role === 'assistant') {
-      const text = last.content || last.fused || '';
-      navigator.clipboard.writeText(text);
+    if (!last || last.role !== 'assistant') return;
+
+    const text = last.content || last.fused || (last.grok + "\n\n" + last.chatgpt) || '';
+    navigator.clipboard.writeText(text).then(() => {
       document.getElementById('status').textContent = 'Copied!';
-      setTimeout(() => document.getElementById('status').textContent = 'Ready', 1500);
-    }
+      setTimeout(() => document.getElementById('status').textContent = 'Ready', 1400);
+    });
   }
 
   function exportChat() {
@@ -692,7 +747,9 @@
     }
   }
 
-  // Boot
+  // Make sure it scrolls on window resize too
+  window.addEventListener('resize', () => scrollToBottom());
+
   init();
 </script>
 </body>
