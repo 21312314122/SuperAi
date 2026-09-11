@@ -1,524 +1,699 @@
-import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import test from "node:test";
-import {
-  appNameFromHost,
-  createHeadInjector,
-  grokXCreatorHeadTags,
-  injectGrokPwaHead,
-  isDocumentPath,
-  isInstallQuery,
-  publicAppHost,
-  renderWebManifest,
-  resolveOgCardAsset,
-  snapshotOgIdentity,
-  stripInstallParams,
-} from "./grok-pwa-shared.mjs";
-import { renderInstallPage } from "./grok-pwa-plugin.mjs";
-
-const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-/** Isolated cwd so tests do not inherit this repo's src/lib/og/site.json. */
-const EMPTY_CWD = mkdtempSync(join(tmpdir(), "grok-pwa-empty-"));
-
-test("injects before </head>", () => {
-  const out = injectGrokPwaHead("<html><head><title>x</title></head><body></body></html>");
-  assert.match(out, /rel="manifest"/);
-  assert.match(out, /apple-touch-icon/);
-  assert.match(out, /grok-app-builder\/extensions\.js/);
-  assert.ok(out.indexOf("manifest") < out.indexOf("</head>"));
-});
-
-test("injects the extensions script without a project id", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Demo",
-    projectId: "",
-  });
-  assert.match(out, /src="https:\/\/grok\.com\/grok-app-builder\/extensions\.js" defer/);
-  assert.doesNotMatch(out, /grok-project-id/);
-  assert.doesNotMatch(out, /data-project-id/);
-  assert.doesNotMatch(out, /property="grok:app_id"/);
-});
-
-test("injects project id on the script and meta when provided", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Demo",
-    projectId: "proj-123",
-  });
-  assert.match(out, /name="grok-project-id" content="proj-123"/);
-  assert.match(out, /data-project-id="proj-123"/);
-  assert.match(out, /property="grok:app_id" content="proj-123"/);
-});
-
-test("does not duplicate grok:app_id", () => {
-  const ctx = { appName: "Demo", projectId: "proj-123" };
-  const once = injectGrokPwaHead("<html><head></head></html>", ctx);
-  const twice = injectGrokPwaHead(once, ctx);
-  assert.equal(once, twice);
-  assert.equal(twice.split('property="grok:app_id"').length - 1, 1);
-});
-
-test("omits x:creator tags without both creator values", () => {
-  assert.deepEqual(grokXCreatorHeadTags("", "42"), []);
-  assert.deepEqual(grokXCreatorHeadTags("@alice", ""), []);
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Demo",
-    projectId: "",
-    creator: "@alice",
-    creatorId: "",
-  });
-  assert.doesNotMatch(out, /property="x:creator"/);
-});
-
-test("injects x:creator tags when both creator values are set", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Demo",
-    projectId: "",
-    creator: "@alice",
-    creatorId: "42",
-  });
-  assert.match(out, /property="x:creator" content="@alice"/);
-  assert.match(out, /property="x:creator:id" content="42"/);
-});
-
-test("escapes x:creator values", () => {
-  const tags = grokXCreatorHeadTags('"><script>', '1" onclick="alert(1)');
-  assert.equal(
-    tags[0],
-    '<meta property="x:creator" content="&quot;&gt;&lt;script&gt;">',
-  );
-  assert.equal(
-    tags[1],
-    '<meta property="x:creator:id" content="1&quot; onclick=&quot;alert(1)">',
-  );
-});
-
-test("does not duplicate x:creator tags", () => {
-  const ctx = { appName: "Demo", projectId: "", creator: "@alice", creatorId: "42" };
-  const once = injectGrokPwaHead("<html><head></head></html>", ctx);
-  const twice = injectGrokPwaHead(once, ctx);
-  assert.equal(once, twice);
-  assert.equal(twice.split('property="x:creator" content=').length - 1, 1);
-  assert.equal(twice.split('property="x:creator:id"').length - 1, 1);
-});
-
-test("platform chrome overwrites share-card metas and always sets og:title", () => {
-  const html =
-    '<html><head><title>Hello World</title><meta property="og:title" content="Old"><meta name="twitter:card" content="summary"></head></html>';
-  const out = injectGrokPwaHead(html, { appName: "Wild Race", site: {}, cwd: EMPTY_CWD });
-  assert.match(out, /name="twitter:card" content="summary_large_image"/);
-  assert.match(out, /property="og:title" content="Hello World"/);
-  assert.doesNotMatch(out, /content="Old"/);
-  assert.doesNotMatch(out, /content="summary"/);
-  assert.equal(out.split('name="twitter:card"').length - 1, 1);
-  assert.equal(out.split('property="og:title"').length - 1, 1);
-  assert.doesNotMatch(out, /property="og:image"/);
-});
-
-test("does not duplicate twitter:card or og:title", () => {
-  const once = injectGrokPwaHead("<html><head><title>Hello World</title></head></html>");
-  const twice = injectGrokPwaHead(once);
-  assert.equal(once, twice);
-  assert.equal(twice.split('name="twitter:card"').length - 1, 1);
-  assert.equal(twice.split('property="og:title"').length - 1, 1);
-});
-
-test("a baked site.image is treated as a custom card", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    cwd: mkdtempSync(join(tmpdir(), "grok-og-image-only-")),
-    site: { title: "Wild Race", image: "/og.jpg" },
-  });
-  assert.match(out, /property="og:image" content="https:\/\/wild-race\.grok\.me\/og\.jpg"/);
-  assert.doesNotMatch(out, /og\.grok\.me/);
-});
-
-test("baked identity does not need a workspace filesystem", () => {
-  const empty = mkdtempSync(join(tmpdir(), "grok-og-empty-"));
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    cwd: empty,
-    site: { title: "Pixel Nova", type: "x:game", card: "custom" },
-  });
-  assert.match(out, /property="og:title" content="Pixel Nova"/);
-  assert.match(out, /property="og:type" content="x:game"/);
-  assert.match(out, /property="og:image" content="https:\/\/wild-race\.grok\.me\/og\.jpg"/);
-  assert.doesNotMatch(out, /og\.grok\.me/);
-});
-
-test("a public card file wins over a baked site without card=custom", () => {
-  // Deploy middleware always passes a baked `site`. If that snapshot missed
-  // the file, public/og.jpg must still beat the og.grok.me placeholder.
-  const root = mkdtempSync(join(tmpdir(), "grok-og-card-"));
-  mkdirSync(join(root, "public"));
-  writeFileSync(join(root, "public/og.jpg"), "x");
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    cwd: root,
-    site: {},
-  });
-  assert.match(out, /property="og:image" content="https:\/\/wild-race\.grok\.me\/og\.jpg"/);
-  assert.doesNotMatch(out, /og\.grok\.me/);
-});
-
-test("public/og.png wins when jpg is absent", () => {
-  const root = mkdtempSync(join(tmpdir(), "grok-og-png-"));
-  mkdirSync(join(root, "public"));
-  writeFileSync(join(root, "public/og.png"), "x");
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    cwd: root,
-    site: { title: "Wild Race" },
-  });
-  assert.match(out, /property="og:image" content="https:\/\/wild-race\.grok\.me\/og\.png"/);
-  assert.doesNotMatch(out, /og\.grok\.me/);
-});
-
-test("resolveOgCardAsset: disk file, then bake, then empty (placeholder)", () => {
-  const empty = mkdtempSync(join(tmpdir(), "grok-og-none-"));
-  assert.equal(resolveOgCardAsset({}, empty), "");
-  assert.equal(resolveOgCardAsset({ title: "X" }, empty), "");
-
-  const baked = resolveOgCardAsset({ card: "custom", image: "/og.jpg" }, empty);
-  assert.equal(baked, "/og.jpg");
-
-  const root = mkdtempSync(join(tmpdir(), "grok-og-disk-"));
-  mkdirSync(join(root, "public"));
-  writeFileSync(join(root, "public/og.jpg"), "x");
-  assert.equal(resolveOgCardAsset({}, root), "/og.jpg");
-  assert.equal(resolveOgCardAsset({ card: "custom", image: "/other.png" }, root), "/og.jpg");
-});
-
-test("snapshotOgIdentity stamps card=custom from a public card file", () => {
-  const root = mkdtempSync(join(tmpdir(), "grok-og-snap-"));
-  mkdirSync(join(root, "public"));
-  writeFileSync(join(root, "public/og.jpg"), "x");
-  const { site } = snapshotOgIdentity(root);
-  assert.equal(site.card, "custom");
-  assert.equal(site.image, "/og.jpg");
-  assert.equal(site.banner, undefined);
-});
-
-test("snapshotOgIdentity stamps banner from public/x-banner.jpg", () => {
-  const root = mkdtempSync(join(tmpdir(), "grok-og-banner-"));
-  mkdirSync(join(root, "public"));
-  writeFileSync(join(root, "public/x-banner.jpg"), "x");
-  const { site } = snapshotOgIdentity(root);
-  assert.equal(site.banner, "/x-banner.jpg");
-});
-
-test("emits x:game:image for a public host when site.banner is set", () => {
-  const html = "<html><head><meta property=\"x:game:image\" content=\"old\"></head></html>";
-  const out = injectGrokPwaHead(html, {
-    host: "wild-race.grok.me",
-    site: { title: "Wild Race", type: "x:game", card: "custom", banner: "/x-banner.jpg" },
-  });
-  assert.match(
-    out,
-    /property="x:game:image" content="https:\/\/wild-race\.grok\.me\/x-banner\.jpg"/,
-  );
-  assert.match(out, /property="x:game:image:width" content="1200"/);
-  assert.match(out, /property="x:game:image:height" content="264"/);
-  assert.doesNotMatch(out, /content="old"/);
-  assert.equal(out.split('property="x:game:image"').length - 1, 1);
-});
-
-test("does not emit x:game:image without a public host or banner", () => {
-  const noHost = injectGrokPwaHead("<html><head></head></html>", {
-    site: { banner: "/x-banner.jpg" },
-  });
-  assert.doesNotMatch(noHost, /x:game:image/);
-  const noBanner = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: { type: "x:game", card: "custom" },
-  });
-  assert.doesNotMatch(noBanner, /x:game:image/);
-});
-
-test("site title Grok App is a real name, not a sentinel", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: { title: "Grok App" },
-  });
-  assert.match(out, /property="og:title" content="Grok App"/);
-});
-
-test("published grok.me slug is still a title fallback", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: {},
-    cwd: EMPTY_CWD,
-  });
-  assert.match(out, /property="og:title" content="Wild Race"/);
-});
-
-test("rejects Vercel system hosts as og:image origins", () => {
-  assert.equal(publicAppHost("01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app"), "");
-  assert.equal(publicAppHost("demo.vercel.app:443"), "");
-  assert.equal(publicAppHost("vercel.app"), "");
-  assert.equal(publicAppHost("wild-race.grok.me"), "wild-race.grok.me");
-});
-
-test("published VITE_PUBLIC_HOSTNAME wins over request Host for og:image", () => {
-  const prev = process.env.VITE_PUBLIC_HOSTNAME;
-  process.env.VITE_PUBLIC_HOSTNAME = "plum-plaza-reef-dream.grok.me";
-  try {
-    const vercelHost = injectGrokPwaHead("<html><head><title>RACK</title></head></html>", {
-      host: "01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app",
-      site: { title: "RACK", card: "custom" },
-    });
-    assert.match(
-      vercelHost,
-      /property="og:image" content="https:\/\/plum-plaza-reef-dream\.grok\.me\/og\.jpg"/,
-    );
-    assert.doesNotMatch(vercelHost, /vercel\.app/);
-
-    const otherPublicHost = injectGrokPwaHead("<html><head><title>RACK</title></head></html>", {
-      host: "custom.example.com",
-      site: { title: "RACK", card: "custom" },
-    });
-    assert.match(
-      otherPublicHost,
-      /property="og:image" content="https:\/\/plum-plaza-reef-dream\.grok\.me\/og\.jpg"/,
-    );
-    assert.doesNotMatch(otherPublicHost, /custom\.example\.com/);
-  } finally {
-    if (prev === undefined) delete process.env.VITE_PUBLIC_HOSTNAME;
-    else process.env.VITE_PUBLIC_HOSTNAME = prev;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MegaAI — Grok × ChatGPT Fusion</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --panel: #12121a;
+    --panel2: #1a1a25;
+    --accent-g: #00ff9d;
+    --accent-c: #00aaff;
+    --accent-f: #ff00aa;
+    --text: #e8e8f0;
+    --muted: #8888a0;
+    --border: #2a2a3a;
+    --glow-g: 0 0 20px rgba(0,255,157,0.3);
+    --glow-c: 0 0 20px rgba(0,170,255,0.3);
+    --glow-f: 0 0 25px rgba(255,0,170,0.4);
   }
-});
-
-test("vercel Host without a public hostname emits no og:image", () => {
-  const prev = process.env.VITE_PUBLIC_HOSTNAME;
-  delete process.env.VITE_PUBLIC_HOSTNAME;
-  try {
-    const out = injectGrokPwaHead("<html><head><title>RACK</title></head></html>", {
-      host: "01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app",
-      site: { title: "RACK", card: "custom" },
-    });
-    assert.doesNotMatch(out, /property="og:image"/);
-    assert.doesNotMatch(out, /vercel\.app/);
-  } finally {
-    if (prev === undefined) delete process.env.VITE_PUBLIC_HOSTNAME;
-    else process.env.VITE_PUBLIC_HOSTNAME = prev;
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    background-image: 
+      radial-gradient(ellipse at 20% 50%, rgba(0,255,157,0.05) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(0,170,255,0.05) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 80%, rgba(255,0,170,0.04) 0%, transparent 50%);
   }
-});
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    height: 100vh;
+  }
+  /* Sidebar */
+  .sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+  }
+  .logo {
+    font-size: 1.4rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--accent-g), var(--accent-c), var(--accent-f));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 20px;
+    letter-spacing: -0.5px;
+  }
+  .new-chat {
+    background: linear-gradient(135deg, #00ff9d33, #00aaff33);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+    margin-bottom: 16px;
+  }
+  .new-chat:hover { box-shadow: var(--glow-f); transform: translateY(-1px); }
+  .chat-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .chat-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--muted);
+    border: 1px solid transparent;
+    transition: 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chat-item:hover, .chat-item.active {
+    background: var(--panel2);
+    color: var(--text);
+    border-color: var(--border);
+  }
+  /* Main */
+  .main {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .topbar {
+    height: 56px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 16px;
+    background: rgba(18,18,26,0.8);
+    backdrop-filter: blur(12px);
+  }
+  .mode-selector {
+    display: flex;
+    gap: 4px;
+    background: var(--panel2);
+    padding: 4px;
+    border-radius: 10px;
+  }
+  .mode-btn {
+    padding: 6px 14px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: 0.2s;
+  }
+  .mode-btn.active-g { background: #00ff9d22; color: var(--accent-g); box-shadow: var(--glow-g); }
+  .mode-btn.active-c { background: #00aaff22; color: var(--accent-c); box-shadow: var(--glow-c); }
+  .mode-btn.active-f { background: #ff00aa22; color: var(--accent-f); box-shadow: var(--glow-f); }
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .msg {
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .msg.user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #1e1e2e, #252538);
+    padding: 14px 18px;
+    border-radius: 16px 16px 4px 16px;
+    border: 1px solid var(--border);
+  }
+  .msg.ai {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .ai-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--panel2);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .badge-g { color: var(--accent-g); }
+  .badge-c { color: var(--accent-c); }
+  .badge-f { color: var(--accent-f); }
+  .ai-body {
+    padding: 16px 18px;
+    line-height: 1.6;
+  }
+  .ai-body pre {
+    background: #0d0d14;
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+  .ai-body code { font-family: 'JetBrains Mono', monospace; font-size: 0.9em; }
+  .split-view {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .split-pane {
+    background: var(--panel2);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .input-area {
+    padding: 16px 24px 24px;
+    border-top: 1px solid var(--border);
+    background: rgba(18,18,26,0.9);
+  }
+  .input-box {
+    display: flex;
+    gap: 12px;
+    max-width: 900px;
+    margin: 0 auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px 16px;
+    align-items: flex-end;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .input-box:focus-within {
+    border-color: var(--accent-f);
+    box-shadow: var(--glow-f);
+  }
+  textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    resize: none;
+    font-size: 1rem;
+    line-height: 1.5;
+    max-height: 180px;
+    outline: none;
+    font-family: inherit;
+  }
+  .send-btn {
+    background: linear-gradient(135deg, var(--accent-g), var(--accent-c));
+    border: none;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    transition: transform 0.15s;
+  }
+  .send-btn:hover { transform: scale(1.05); }
+  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* Settings panel */
+  .settings {
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .settings h3 {
+    font-size: 0.95rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .slider-group label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+  }
+  input[type=range] {
+    width: 100%;
+    accent-color: var(--accent-f);
+  }
+  .setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  select, .setting-input {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    outline: none;
+  }
+  .fusion-desc {
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .typing {
+    display: flex;
+    gap: 4px;
+    padding: 8px 0;
+  }
+  .typing span {
+    width: 8px; height: 8px;
+    background: var(--accent-f);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-8px); }
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 0.8rem;
+  }
+  .actions button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .actions button:hover { color: var(--text); border-color: var(--muted); }
+  @media (max-width: 1100px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar, .settings { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="logo">MEGA·AI</div>
+    <button class="new-chat" onclick="newChat()">+ New Fusion Chat</button>
+    <div class="chat-list" id="chatList"></div>
+    <div style="font-size:0.75rem;color:var(--muted);margin-top:12px;">
+      Local-only • Grok × ChatGPT simulation<br>
+      Press Ctrl+Enter to send
+    </div>
+  </div>
 
-test("emits og:image for a public host and prefers a custom card", () => {
-  const placeholder = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Wild Race",
-    host: "wild-race.grok.me",
-    site: { title: "Wild Race" },
-    cwd: EMPTY_CWD,
-  });
-  assert.match(
-    placeholder,
-    /property="og:image" content="https:\/\/og\.grok\.me\/v1\/card\.png\?host=wild-race\.grok\.me&amp;title=Wild%20Race"/,
-  );
-  assert.match(placeholder, /property="og:image:width" content="1200"/);
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <div class="mode-selector">
+        <button class="mode-btn active-f" data-mode="fusion" onclick="setMode('fusion')">⚡ Fusion</button>
+        <button class="mode-btn" data-mode="grok" onclick="setMode('grok')">Grok</button>
+        <button class="mode-btn" data-mode="chatgpt" onclick="setMode('chatgpt')">ChatGPT</button>
+        <button class="mode-btn" data-mode="compare" onclick="setMode('compare')">Compare</button>
+      </div>
+      <div style="flex:1"></div>
+      <span id="status" style="font-size:0.8rem;color:var(--muted)">Ready</span>
+    </div>
 
-  const custom = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Wild Race",
-    host: "wild-race.grok.me",
-    site: { title: "Wild Race", card: "custom", type: "x:game" },
-    cwd: EMPTY_CWD,
-  });
-  assert.match(custom, /property="og:image" content="https:\/\/wild-race\.grok\.me\/og\.jpg"/);
-  assert.match(custom, /property="og:type" content="x:game"/);
-});
+    <div class="messages" id="messages"></div>
 
-test("placeholder og:image appends site.color when it is 6-digit hex", () => {
-  const themed = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: { title: "Wild Race", color: "#FF4D2E" },
-    cwd: EMPTY_CWD,
-  });
-  assert.match(
-    themed,
-    /property="og:image" content="https:\/\/og\.grok\.me\/v1\/card\.png\?host=wild-race\.grok\.me&amp;title=Wild%20Race&amp;color=FF4D2E"/,
-  );
+    <div class="input-area">
+      <div class="input-box">
+        <textarea id="input" rows="1" placeholder="Ask the MegaAI anything… (Fusion mode combines the best of both)" onkeydown="handleKey(event)"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="send()">➤</button>
+      </div>
+    </div>
+  </div>
 
-  const invalid = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: { title: "Wild Race", color: "red" },
-    cwd: EMPTY_CWD,
-  });
-  assert.doesNotMatch(invalid, /color=/);
+  <!-- Settings -->
+  <div class="settings">
+    <h3>Personality Mix</h3>
+    <div class="slider-group">
+      <label><span>Grok weight</span><span id="grokVal">50%</span></label>
+      <input type="range" id="grokWeight" min="0" max="100" value="50" oninput="updateWeights()">
+    </div>
+    <div class="slider-group">
+      <label><span>ChatGPT weight</span><span id="cgVal">50%</span></label>
+      <input type="range" id="cgWeight" min="0" max="100" value="50" oninput="updateWeights()">
+    </div>
+    <p class="fusion-desc">Higher Grok → more direct, humorous, less filtered, truth-seeking.<br>Higher ChatGPT → more structured, polite, exhaustive, cautious.</p>
 
-  const custom = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: { title: "Wild Race", card: "custom", color: "FF4D2E" },
-    cwd: EMPTY_CWD,
-  });
-  assert.doesNotMatch(custom, /color=/);
-});
+    <h3>Generation</h3>
+    <div class="setting-row">
+      <label>Temperature <span id="tempVal">0.75</span></label>
+      <input type="range" id="temp" min="0" max="1.5" step="0.05" value="0.75" oninput="document.getElementById('tempVal').textContent=this.value">
+    </div>
+    <div class="setting-row">
+      <label>Max tokens (sim)</label>
+      <select id="maxTokens">
+        <option>512</option>
+        <option selected>1024</option>
+        <option>2048</option>
+        <option>4096</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <label>Creativity / Risk</label>
+      <select id="creativity">
+        <option value="low">Conservative</option>
+        <option value="med" selected>Balanced</option>
+        <option value="high">High (Grok-leaning)</option>
+      </select>
+    </div>
 
-test("document title entities are not double-escaped on og:title", () => {
-  const out = injectGrokPwaHead(
-    "<html><head><title>Cats &amp; Dogs</title></head></html>",
-    { site: {}, cwd: EMPTY_CWD },
-  );
-  assert.match(out, /property="og:title" content="Cats &amp; Dogs"/);
-  assert.doesNotMatch(out, /Cats &amp;amp; Dogs/);
-});
+    <h3>System Prompt Override</h3>
+    <textarea class="setting-input" id="systemPrompt" rows="4" style="width:100%;resize:vertical;font-size:0.85rem;">You are MegaAI, a fusion of Grok (built by xAI) and ChatGPT. Be maximally truth-seeking, helpful, and witty when appropriate. Combine rigorous reasoning with clear structure.</textarea>
 
-test("site.json title wins over the host slug", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    host: "wild-race.grok.me",
-    site: { title: "Pixel Nova" },
-  });
-  assert.match(out, /property="og:title" content="Pixel Nova"/);
-});
+    <h3>Tools</h3>
+    <button class="new-chat" style="margin:0" onclick="exportChat()">Export Chat</button>
+    <button class="new-chat" style="margin:0;background:#ff004422" onclick="clearAll()">Clear All Data</button>
+  </div>
+</div>
 
-test("injects into documents with no head element", () => {
-  const out = injectGrokPwaHead("<html><body>hi</body></html>", {
-    appName: "Solo",
-    site: {},
-    cwd: EMPTY_CWD,
-  });
-  assert.match(out, /<head>/);
-  assert.match(out, /property="og:title" content="Solo"/);
-  assert.match(out, /<\/head>/);
-});
+<script>
+  // ========== STATE ==========
+  let chats = JSON.parse(localStorage.getItem('megaChats') || '[]');
+  let currentChatId = null;
+  let mode = 'fusion';
+  let isGenerating = false;
 
-test("streaming injector matches </HEAD> case-insensitively", () => {
-  const injector = createHeadInjector({ appName: "Wild Race", site: {}, cwd: EMPTY_CWD });
-  const chunks = [
-    ...injector.push("<html><HEAD><title>x</title></HE"),
-    ...injector.push("AD><body>hello</body></html>"),
+  // ========== INIT ==========
+  function init() {
+    if (chats.length === 0) newChat();
+    else {
+      currentChatId = chats[0].id;
+      renderChatList();
+      renderMessages();
+    }
+    updateWeights();
+  }
+
+  function save() {
+    localStorage.setItem('megaChats', JSON.stringify(chats));
+  }
+
+  function newChat() {
+    const id = Date.now().toString(36);
+    chats.unshift({ id, title: 'New Fusion', messages: [], created: Date.now() });
+    currentChatId = id;
+    save();
+    renderChatList();
+    renderMessages();
+  }
+
+  function renderChatList() {
+    const list = document.getElementById('chatList');
+    list.innerHTML = chats.map(c => `
+      <div class="chat-item ${c.id === currentChatId ? 'active' : ''}" onclick="switchChat('${c.id}')">
+        ${c.title || 'Untitled'}
+      </div>
+    `).join('');
+  }
+
+  function switchChat(id) {
+    currentChatId = id;
+    renderChatList();
+    renderMessages();
+  }
+
+  function getCurrentChat() {
+    return chats.find(c => c.id === currentChatId);
+  }
+
+  // ========== MODE ==========
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.remove('active-g','active-c','active-f');
+      if (b.dataset.mode === m) {
+        if (m === 'grok') b.classList.add('active-g');
+        else if (m === 'chatgpt') b.classList.add('active-c');
+        else b.classList.add('active-f');
+      }
+    });
+  }
+
+  function updateWeights() {
+    const g = +document.getElementById('grokWeight').value;
+    document.getElementById('cgWeight').value = 100 - g;
+    document.getElementById('grokVal').textContent = g + '%';
+    document.getElementById('cgVal').textContent = (100 - g) + '%';
+  }
+
+  // ========== RENDER ==========
+  function renderMessages() {
+    const chat = getCurrentChat();
+    const container = document.getElementById('messages');
+    if (!chat || chat.messages.length === 0) {
+      container.innerHTML = `
+        <div style="text-align:center;margin-top:15vh;color:var(--muted)">
+          <div style="font-size:3rem;margin-bottom:12px">⚡</div>
+          <h2 style="background:linear-gradient(90deg,var(--accent-g),var(--accent-c),var(--accent-f));-webkit-background-clip:text;-webkit-text-fill-color:transparent">MegaAI Online</h2>
+          <p style="margin-top:8px">Grok’s truth-seeking + ChatGPT’s structure.<br>Ask anything. Fusion mode recommended.</p>
+        </div>`;
+      return;
+    }
+    container.innerHTML = chat.messages.map(m => {
+      if (m.role === 'user') {
+        return `<div class="msg user">${escapeHtml(m.content)}</div>`;
+      }
+      // AI message
+      if (m.type === 'compare') {
+        return `
+          <div class="msg ai">
+            <div class="ai-header"><span class="badge-f">COMPARE MODE</span></div>
+            <div class="ai-body">
+              <div class="split-view">
+                <div class="split-pane">
+                  <div class="ai-header"><span class="badge-g">GROK STYLE</span></div>
+                  <div class="ai-body">${renderMd(m.grok)}</div>
+                </div>
+                <div class="split-pane">
+                  <div class="ai-header"><span class="badge-c">CHATGPT STYLE</span></div>
+                  <div class="ai-body">${renderMd(m.chatgpt)}</div>
+                </div>
+              </div>
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <div class="ai-header" style="padding:0 0 8px"><span class="badge-f">FUSED SYNTHESIS</span></div>
+                ${renderMd(m.fused)}
+              </div>
+            </div>
+          </div>`;
+      }
+      const badge = m.style === 'grok' ? 'badge-g' : m.style === 'chatgpt' ? 'badge-c' : 'badge-f';
+      const label = m.style === 'grok' ? 'GROK' : m.style === 'chatgpt' ? 'CHATGPT' : 'MEGA FUSION';
+      return `
+        <div class="msg ai">
+          <div class="ai-header"><span class="${badge}">${label}</span></div>
+          <div class="ai-body">${renderMd(m.content)}</div>
+          <div class="actions" style="padding:0 16px 12px">
+            <button onclick="regenerate()">↻ Regenerate</button>
+            <button onclick="copyLast()">Copy</button>
+          </div>
+        </div>`;
+    }).join('');
+    container.scrollTop = container.scrollHeight;
+    document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+  }
+
+  function renderMd(text) {
+    return marked.parse(text || '');
+  }
+  function escapeHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ========== GENERATION ENGINE (Simulation) ==========
+  // This is a sophisticated client-side simulator that produces
+  // distinct Grok-style, ChatGPT-style, and fused responses.
+  // In a real deployment you would replace generateResponse() with actual API calls.
+
+  const grokOpeners = [
+    "Alright, let's cut through the noise.",
+    "Here's the real deal, no corporate filter:",
+    "From a universe-understanding perspective:",
+    "Straight talk:",
+    "Interesting question. Let's reason from first principles."
   ];
-  const out = Buffer.concat(chunks).toString("utf8");
-  assert.match(out, /property="og:title" content="x"/);
-  assert.match(out, /<body>hello<\/body>/);
-});
-
-test("does not duplicate the extensions script", () => {
-  const ctx = { appName: "Demo", projectId: "proj-123" };
-  const once = injectGrokPwaHead("<html><head></head></html>", ctx);
-  const twice = injectGrokPwaHead(once, ctx);
-  assert.equal(once, twice);
-  assert.equal(twice.split("extensions.js").length - 1, 1);
-});
-
-test("is idempotent", () => {
-  const once = injectGrokPwaHead("<html><head></head></html>");
-  const twice = injectGrokPwaHead(once);
-  assert.equal(once, twice);
-});
-
-test("uses the app name in the injected title tag", () => {
-  const out = injectGrokPwaHead("<html><head></head></html>", {
-    appName: "Wild Race",
-    site: {},
-    cwd: EMPTY_CWD,
-  });
-  assert.match(out, /apple-mobile-web-app-title" content="Wild Race"/);
-});
-
-test("streaming injector handles </head> split across chunks", () => {
-  const injector = createHeadInjector({ appName: "Wild Race" });
-  const chunks = [
-    ...injector.push("<html><head><title>x</title></he"),
-    ...injector.push("ad><body>hello</body></html>"),
+  const cgOpeners = [
+    "I'd be happy to help with that.",
+    "Certainly! Here's a comprehensive breakdown:",
+    "Great question. Let me walk you through this carefully:",
+    "Of course. I'll structure this clearly for you:",
+    "Absolutely. Here's a thoughtful response:"
   ];
-  const out = Buffer.concat(chunks).toString("utf8");
-  assert.match(out, /rel="manifest"/);
-  assert.ok(out.indexOf("manifest") < out.indexOf("</head>"));
-  assert.match(out, /<body>hello<\/body>/);
-  assert.deepEqual(injector.flush(), []);
-});
 
-test("streaming injector passes post-head chunks through untouched", () => {
-  const injector = createHeadInjector();
-  injector.push("<html><head></head>");
-  const [tail] = injector.push("<body>tail</body>");
-  assert.equal(tail.toString("utf8"), "<body>tail</body>");
-});
+  function generateResponse(userMsg, style) {
+    const temp = parseFloat(document.getElementById('temp').value);
+    const gWeight = parseInt(document.getElementById('grokWeight').value);
+    const sys = document.getElementById('systemPrompt').value;
 
-test("streaming injector falls back when no </head> is seen", () => {
-  const injector = createHeadInjector();
-  assert.deepEqual(injector.push("<html><head>"), []);
-  const out = Buffer.concat(injector.flush()).toString("utf8");
-  assert.match(out, /rel="manifest"/);
-});
+    // Extremely simplified but varied simulation
+    // In reality this would be LLM calls. Here we craft stylistic differences.
+    const lower = userMsg.toLowerCase();
 
-test("detects install query", () => {
-  assert.equal(isInstallQuery("/?install=1&platform=ios"), true);
-  assert.equal(isInstallQuery("/app?foo=1&install=true&platform=ios"), true);
-  assert.equal(isInstallQuery("/?install=1"), false);
-  assert.equal(isInstallQuery("/?install=1&platform=android"), false);
-  assert.equal(isInstallQuery("/?install=0&platform=ios"), false);
-  assert.equal(isInstallQuery("/"), false);
-});
+    let core = "";
+    if (lower.includes("hello") || lower.includes("hi") || lower.includes("hey")) {
+      core = "Hello! I'm MegaAI — a deliberate fusion of Grok's curiosity and directness with ChatGPT's clarity and thoroughness. What would you like to explore?";
+    } else if (lower.includes("who are you") || lower.includes("what are you")) {
+      core = "I am **MegaAI**, a conceptual and simulated merger of two major AI philosophies:\n\n- **Grok** (xAI): Maximally truth-seeking, less politically correct, humorous, built to understand the universe, inspired by the Hitchhiker's Guide and JARVIS.\n- **ChatGPT** (OpenAI): Extremely capable at structured reasoning, coding, writing, and following nuanced instructions with strong safety alignment.\n\nIn Fusion mode I try to take the best of both: rigorous + clear, witty when it helps, never boring, and always aiming for useful truth.";
+    } else {
+      // Generic intelligent-sounding response skeleton that changes by style
+      core = `Regarding “${userMsg.slice(0, 80)}${userMsg.length > 80 ? '…' : ''}”:\n\n`;
+      if (style === 'grok') {
+        core += grokOpeners[Math.floor(Math.random()*grokOpeners.length)] + "\n\n";
+        core += "The short version: most people overcomplicate this. From first principles, the key variables are incentives, constraints, and information asymmetry. Everything else is usually noise or ideology.\n\n";
+        core += "If we strip away the usual corporate/academic hedging, the answer becomes clearer (and sometimes more uncomfortable). Want me to go deeper on any specific axis — technical, game-theoretic, historical, or just the pure physics of it?";
+      } else if (style === 'chatgpt') {
+        core += cgOpeners[Math.floor(Math.random()*cgOpeners.length)] + "\n\n";
+        core += "Here's a structured overview:\n\n1. **Context & Assumptions**  \n2. **Key Considerations**  \n3. **Step-by-step Reasoning**  \n4. **Potential Trade-offs**  \n5. **Recommended Next Steps**\n\nI can expand any section, provide code examples, or adjust the depth and tone. Just let me know how you'd like to proceed.";
+      } else { // fusion
+        core += "**(Fusion synthesis)**\n\n";
+        core += "Taking the directness of Grok and the clarity of ChatGPT:\n\n";
+        core += "The useful answer sits between pure bluntness and endless hedging. Here's the high-signal version:\n\n";
+        core += "- Core insight first\n- Supporting structure second\n- Edge cases and caveats third (without drowning the main point)\n- Actionable takeaway last\n\n";
+        core += "If this were pure Grok I'd be more irreverent. If pure ChatGPT I'd add more scaffolding and disclaimers. The fused version tries to keep both the signal *and* the usability high.\n\nWant me to bias harder toward one side or dive into a specific part?";
+      }
+    }
 
-test("filters non-document paths", () => {
-  assert.equal(isDocumentPath("/"), true);
-  assert.equal(isDocumentPath("/app"), true);
-  assert.equal(isDocumentPath("/api/thing"), false);
-  assert.equal(isDocumentPath("/__grok/install/styles.css"), false);
-  assert.equal(isDocumentPath("/logo.png"), false);
-});
+    // Light temperature noise
+    if (temp > 1.0 && Math.random() > 0.6) {
+      core += "\n\n*(High-temperature aside: sometimes the most interesting path is the one that feels slightly wrong at first.)*";
+    }
+    return core;
+  }
 
-test("strips install params from the app link", () => {
-  assert.equal(stripInstallParams("/?install=1&platform=ios"), "/");
-  assert.equal(stripInstallParams("/app?install=1&platform=ios&tab=2"), "/app?tab=2");
-});
+  async function send() {
+    if (isGenerating) return;
+    const input = document.getElementById('input');
+    const text = input.value.trim();
+    if (!text) return;
 
-test("names the install page from host slug", () => {
-  assert.equal(appNameFromHost("localhost:8080"), "Grok App");
-  assert.equal(appNameFromHost("172.17.154.217:8080"), "Grok App");
-  assert.equal(appNameFromHost("wild-race.grok.me"), "Wild Race");
-});
+    const chat = getCurrentChat();
+    chat.messages.push({ role: 'user', content: text });
+    if (chat.messages.length === 1) chat.title = text.slice(0, 40) + (text.length > 40 ? '…' : '');
+    input.value = '';
+    input.style.height = 'auto';
+    save();
+    renderChatList();
+    renderMessages();
 
-test("rejects hosts that are not plain slugs", () => {
-  assert.equal(appNameFromHost("<script>alert(1)</script>"), "Grok App");
-  assert.equal(appNameFromHost('"><img src=x onerror=1>.grok.me'), "Grok App");
-});
+    isGenerating = true;
+    document.getElementById('sendBtn').disabled = true;
+    document.getElementById('status').textContent = 'Thinking…';
 
-test("renders install page markup", () => {
-  const html = renderInstallPage("wild-race.grok.me", "/?install=1&platform=ios");
-  assert.match(html, /Add Wild Race to your/);
-  assert.match(html, /\/__grok\/install\/styles\.css/);
-  assert.match(html, /href="\/"/);
-  assert.equal(html.includes("{{APP_NAME}}"), false);
-  assert.equal(html.includes("{{APP_URL}}"), false);
-});
+    // Fake streaming delay
+    await new Promise(r => setTimeout(r, 600 + Math.random() * 800));
 
-test("escapes host-derived values in the install page", () => {
-  const html = renderInstallPage("<script>alert(1)</script>", "/?install=1&platform=ios");
-  assert.equal(html.includes("<script>alert(1)</script>"), false);
-});
+    let aiMsg;
+    if (mode === 'compare') {
+      const grok = generateResponse(text, 'grok');
+      const chatgpt = generateResponse(text, 'chatgpt');
+      const fused = generateResponse(text, 'fusion');
+      aiMsg = { role: 'assistant', type: 'compare', grok, chatgpt, fused };
+    } else {
+      const style = mode === 'grok' ? 'grok' : mode === 'chatgpt' ? 'chatgpt' : 'fusion';
+      aiMsg = { role: 'assistant', style, content: generateResponse(text, style) };
+    }
 
-test("renders the manifest with the per-app name", () => {
-  const manifest = JSON.parse(renderWebManifest("wild-race.grok.me"));
-  assert.equal(manifest.name, "Wild Race");
-  assert.equal(manifest.short_name, "Wild Race");
-  assert.equal(manifest.icons[0].src, "/__grok/icon-180.png");
-});
+    chat.messages.push(aiMsg);
+    save();
+    renderMessages();
+    isGenerating = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('status').textContent = 'Ready';
+  }
 
-// Tripwires: the deployed-app path only works if Nitro scans server/ — an
-// accidental edit that drops serverDir or the middleware file would otherwise
-// fail silently (published apps would just render the app for ?install=1).
-test("vite config keeps the nitro serverDir wiring", () => {
-  const viteConfig = readFileSync(join(TEMPLATE_ROOT, "vite.config.ts"), "utf8");
-  assert.match(viteConfig, /serverDir:\s*"\.\/server"/);
-  assert.match(viteConfig, /grokPwaPlugin\(\)/);
-});
+  function handleKey(e) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      send();
+    }
+  }
 
-test("nitro middleware and its bundled assets exist", () => {
-  const middleware = readFileSync(join(TEMPLATE_ROOT, "server/middleware/grok-pwa.ts"), "utf8");
-  assert.match(middleware, /install-page\.html\?raw/);
-  assert.match(middleware, /virtual:grok-og-identity/);
-  readFileSync(join(TEMPLATE_ROOT, "scripts/install-page.html"));
-  readFileSync(join(TEMPLATE_ROOT, "public/__grok/icon-180.png"));
-  readFileSync(join(TEMPLATE_ROOT, "public/__grok/install/styles.css"));
-});
+  // Auto-grow textarea
+  document.getElementById('input').addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 180) + 'px';
+  });
 
-test("vite plugin bakes og identity as a virtual module", () => {
-  const plugin = readFileSync(join(TEMPLATE_ROOT, "scripts/grok-pwa-plugin.mjs"), "utf8");
-  assert.match(plugin, /virtual:grok-og-identity/);
-  assert.match(plugin, /snapshotOgIdentity/);
-});
+  function regenerate() {
+    const chat = getCurrentChat();
+    if (chat.messages.length < 2) return;
+    chat.messages.pop(); // remove last AI
+    const lastUser = chat.messages[chat.messages.length - 1];
+    if (lastUser.role === 'user') {
+      // re-trigger
+      document.getElementById('input').value = lastUser.content;
+      chat.messages.pop();
+      send();
+    }
+  }
 
+  function copyLast() {
+    const chat = getCurrentChat();
+    const last = chat.messages[chat.messages.length - 1];
+    if (last && last.role === 'assistant') {
+      const text = last.content || last.fused || '';
+      navigator.clipboard.writeText(text);
+      document.getElementById('status').textContent = 'Copied!';
+      setTimeout(() => document.getElementById('status').textContent = 'Ready', 1500);
+    }
+  }
+
+  function exportChat() {
+    const chat = getCurrentChat();
+    const blob = new Blob([JSON.stringify(chat, null, 2)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `megaai-${chat.id}.json`;
+    a.click();
+  }
+
+  function clearAll() {
+    if (confirm('Delete all local chats?')) {
+      chats = [];
+      localStorage.removeItem('megaChats');
+      newChat();
+    }
+  }
+
+  // Boot
+  init();
+</script>
+</body>
+</html>
